@@ -73,5 +73,4 @@ class PreviewTab(QWidget):
         if ai_needs_review:
             QMessageBox.warning(self, "Требуется предпросмотр", "Для AI-писем откройте карточку и подтвердите текст перед отправкой.")
             return
-        self.app_state["send_ready"] = True
-        QMessageBox.information(self, "Подтверждение", f"Будет отправлено {count} писем с вложением {info['name']}. Перейдите во вкладку Отправка и логи и нажмите Старт.")
+        QMessageBox.information(self, "Подтверждение", f"Будет отправлено {count} писем с вложением {info['name']}.")

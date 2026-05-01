@@ -2,7 +2,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QFileDialog, QL
 from app.core.template_engine import DEFAULT_SUBJECT, DEFAULT_BODY, generate_email
 from app.core.attachment_manager import attachment_info
 from app.core.ai_personalizer import ai_available, generate_ai_comment
-from app.core.database import replace_emails
 
 
 class TemplateTab(QWidget):
@@ -54,7 +53,5 @@ class TemplateTab(QWidget):
             row["send_status"] = "pending"
             emails.append(row)
         self.app_state["emails"] = emails
-        self.app_state["send_ready"] = False
-        replace_emails(emails)
         self.app_state["generation_mode"] = "ai" if use_ai and ai_ok else "normal"
         QMessageBox.information(self, "OK", f"Сгенерировано: {len(emails)}")

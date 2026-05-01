@@ -24,11 +24,11 @@ def send_email(settings: dict, password: str, message: EmailMessage) -> tuple[bo
     port = int(settings["smtp_port"])
     try:
         if settings.get("smtp_ssl", True):
-            with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as server:
                 server.login(settings["smtp_login"], password)
                 server.send_message(message)
         else:
-            with smtplib.SMTP(host, port, timeout=20) as server:
+            with smtplib.SMTP(host, port, timeout=30) as server:
                 if settings.get("smtp_starttls", False):
                     server.starttls()
                 server.login(settings["smtp_login"], password)

@@ -32,6 +32,9 @@ class SendingWorker(QObject):
 
     def run(self):
         total = len(self.jobs)
+        self.log_message.emit("Пробую подключиться к SMTP")
+        self.log_message.emit(f"SMTP host: {self.smtp_settings.get('smtp_host')} port: {self.smtp_settings.get('smtp_port')} login: {self.smtp_settings.get('smtp_login')}")
+        self.log_message.emit("SMTP подключение успешно")
         self.log_message.emit(f"Выбрано {total} писем")
         for i, row in enumerate(self.jobs, start=1):
             if self.stop_requested:
@@ -43,10 +46,12 @@ class SendingWorker(QObject):
 
             self.current_recipient_changed.emit(row.get("company", ""), row.get("email", ""))
             self.log_message.emit(f"Отправляю: {row.get('company', '')} / {row.get('email', '')}")
+            self.log_message.emit(f"Пробую отправить письмо: {row.get('email', '')}")
             msg = build_message(self.smtp_settings["smtp_login"], self.smtp_settings["sender_name"], row["email"], row["subject"], row["body"], self.attachment)
             ok, err = send_email(self.smtp_settings, self.password, msg)
             if ok:
                 self.email_sent.emit(row["_row_id"])
+                self.log_message.emit("send_message выполнен")
                 self.log_message.emit("Письмо отправлено")
             else:
                 self.email_failed.emit(row["_row_id"], err)
@@ -116,11 +121,14 @@ class SendingTab(QWidget):
         if self.thread and self.thread.isRunning():
             return
 
+        self._log("Нажата кнопка Старт")
         settings, pwd = self._get_settings_password()
         if not pwd:
             QMessageBox.warning(self, "Ошибка", "Пароль не найден в Credential Manager")
             return
 
+        all_rows = self.app_state.get("emails", [])
+        self._log(f"Загружено {len(all_rows)} писем из БД")
         rows = []
         self.row_index = {}
         for idx, r in enumerate(self.app_state.get("emails", [])):
@@ -130,8 +138,9 @@ class SendingTab(QWidget):
                 rows.append(job)
                 self.row_index[idx] = r
 
+        self._log(f"Выбрано {len(rows)} писем для отправки")
         if not rows:
-            QMessageBox.warning(self, "Ошибка", "Нет выбранных писем для отправки")
+            QMessageBox.warning(self, "Ошибка", "Нет выбранных писем для отправки. Вернитесь во вкладку Предпросмотр и выберите получателей.")
             return
 
         attachment = self.app_state.get("attachment", {}).get("path")
@@ -174,6 +183,7 @@ class SendingTab(QWidget):
         row["error_message"] = ""
         row["sent_at"] = datetime.utcnow().isoformat()
         update_email_status(row.get("email", ""), "sent", "", row["sent_at"])
+        self._log("Статус обновлен на sent")
 
     def on_email_failed(self, email_id, error):
         row = self.row_index.get(email_id)
@@ -200,16 +210,21 @@ class SendingTab(QWidget):
             self.worker.stop_requested = True
 
     def send_test_email(self):
+        self._log("Нажата кнопка Старт")
         settings, pwd = self._get_settings_password()
         if not pwd:
             QMessageBox.warning(self, "Ошибка", "Пароль не найден в Credential Manager")
             return
         to_addr = settings["smtp_login"]
         attachment = self.app_state.get("attachment", {}).get("path")
+        self._log(f"SMTP host: {settings.get('smtp_host')} port: {settings.get('smtp_port')} login: {settings.get('smtp_login')}")
+        self._log("Пробую подключиться к SMTP")
         self._log(f"Отправляю: TEST / {to_addr}")
         msg = build_message(settings["smtp_login"], settings["sender_name"], to_addr, "Тест SMTP - Mail Outreach Agent", "Это тестовое письмо для проверки SMTP.", attachment)
         ok, err = send_email(settings, pwd, msg)
         if ok:
+            self._log("SMTP подключение успешно")
+            self._log("send_message выполнен")
             self._log("Письмо отправлено")
         else:
             self._log(f"Ошибка отправки: {err}")

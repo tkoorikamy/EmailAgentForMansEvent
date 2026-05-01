@@ -1,4 +1,5 @@
 import csv
+from datetime import datetime
 from pathlib import Path
 import keyring
 from PySide6.QtCore import QObject, QThread, Signal
@@ -12,38 +13,27 @@ SERVICE = "MailOutreachAgent"
 
 
 class SendingWorker(QObject):
-    started = Signal()
+    log_message = Signal(str)
     progress_changed = Signal(int, int)
     current_recipient_changed = Signal(str, str)
-    log_message = Signal(str)
-    email_sent = Signal(str)
-    email_failed = Signal(str, str)
+    email_sent = Signal(int)
+    email_failed = Signal(int, str)
     finished = Signal()
 
-    def __init__(self, jobs, settings, password, attachment, delay_seconds):
+    def __init__(self, jobs, delay_seconds, max_per_run, smtp_settings, password, attachment):
         super().__init__()
-        self.jobs = jobs
-        self.settings = settings
+        self.jobs = jobs[: max(0, int(max_per_run))]
+        self.delay_seconds = max(0, int(delay_seconds))
+        self.smtp_settings = smtp_settings
         self.password = password
         self.attachment = attachment
-        self.delay_seconds = max(0, int(delay_seconds))
         self.stop_requested = False
         self.pause_requested = False
 
-    def request_stop(self):
-        self.stop_requested = True
-
-    def request_pause(self):
-        self.pause_requested = True
-
-    def request_resume(self):
-        self.pause_requested = False
-
     def run(self):
-        self.started.emit()
         total = len(self.jobs)
         self.log_message.emit(f"Выбрано {total} писем")
-        for idx, row in enumerate(self.jobs, start=1):
+        for i, row in enumerate(self.jobs, start=1):
             if self.stop_requested:
                 break
             while self.pause_requested and not self.stop_requested:
@@ -51,21 +41,20 @@ class SendingWorker(QObject):
             if self.stop_requested:
                 break
 
-            company, email = row.get("company", ""), row.get("email", "")
-            self.current_recipient_changed.emit(company, email)
-            self.log_message.emit(f"Отправляю: {company} / {email}")
-
-            msg = build_message(self.settings["smtp_login"], self.settings["sender_name"], email, row["subject"], row["body"], self.attachment)
-            ok, err = send_email(self.settings, self.password, msg)
+            self.current_recipient_changed.emit(row.get("company", ""), row.get("email", ""))
+            self.log_message.emit(f"Отправляю: {row.get('company', '')} / {row.get('email', '')}")
+            msg = build_message(self.smtp_settings["smtp_login"], self.smtp_settings["sender_name"], row["email"], row["subject"], row["body"], self.attachment)
+            ok, err = send_email(self.smtp_settings, self.password, msg)
             if ok:
-                self.email_sent.emit(email)
-                self.log_message.emit("Успешно отправлено")
+                self.email_sent.emit(row["_row_id"])
+                self.log_message.emit("Письмо отправлено")
             else:
-                self.email_failed.emit(email, err)
-                self.log_message.emit(f"Ошибка: {err}")
+                self.email_failed.emit(row["_row_id"], err)
+                self.log_message.emit(f"Ошибка отправки: {err}")
+            self.progress_changed.emit(i, total)
 
-            self.progress_changed.emit(idx, total)
-            if idx < total:
+            if i < total and self.delay_seconds > 0:
+                self.log_message.emit(f"Пауза {self.delay_seconds} секунд")
                 for _ in range(self.delay_seconds * 5):
                     if self.stop_requested:
                         break
@@ -83,6 +72,7 @@ class SendingTab(QWidget):
         self.app_state = app_state
         self.worker = None
         self.thread = None
+        self.row_index = {}
 
         lay = QVBoxLayout(self)
         self.progress = QLabel("Ожидание")
@@ -125,18 +115,23 @@ class SendingTab(QWidget):
     def start_sending(self):
         if self.thread and self.thread.isRunning():
             return
-        if not self.app_state.get("send_ready"):
-            QMessageBox.warning(self, "Ошибка", "Нет выбранных писем для отправки. Вернитесь во вкладку Предпросмотр и выберите получателей.")
-            return
 
         settings, pwd = self._get_settings_password()
         if not pwd:
             QMessageBox.warning(self, "Ошибка", "Пароль не найден в Credential Manager")
             return
 
-        rows = [r for r in self.app_state.get("emails", []) if r.get("selected", True) and r.get("send_status", "pending") == "pending"]
+        rows = []
+        self.row_index = {}
+        for idx, r in enumerate(self.app_state.get("emails", [])):
+            if r.get("selected", True) and r.get("send_status", "pending") == "pending":
+                job = dict(r)
+                job["_row_id"] = idx
+                rows.append(job)
+                self.row_index[idx] = r
+
         if not rows:
-            QMessageBox.warning(self, "Ошибка", "Нет выбранных писем для отправки. Вернитесь во вкладку Предпросмотр и выберите получателей.")
+            QMessageBox.warning(self, "Ошибка", "Нет выбранных писем для отправки")
             return
 
         attachment = self.app_state.get("attachment", {}).get("path")
@@ -150,19 +145,18 @@ class SendingTab(QWidget):
         self._set_running(True)
 
         self.thread = QThread(self)
-        self.worker = SendingWorker(rows, settings, pwd, attachment, settings.get("delay_seconds", 20))
+        self.worker = SendingWorker(rows, settings.get("delay_seconds", 20), settings.get("max_per_run", 50), settings, pwd, attachment)
         self.worker.moveToThread(self.thread)
 
         self.thread.started.connect(self.worker.run)
+        self.worker.log_message.connect(self._log)
         self.worker.progress_changed.connect(self.on_progress)
         self.worker.current_recipient_changed.connect(self.on_current_recipient)
-        self.worker.log_message.connect(self._log)
         self.worker.email_sent.connect(self.on_email_sent)
         self.worker.email_failed.connect(self.on_email_failed)
         self.worker.finished.connect(self.on_finished)
         self.worker.finished.connect(self.thread.quit)
         self.thread.finished.connect(self.thread.deleteLater)
-
         self.thread.start()
 
     def on_progress(self, current, total):
@@ -172,21 +166,22 @@ class SendingTab(QWidget):
     def on_current_recipient(self, company, email):
         self.progress.setText(f"Текущий получатель: {company} / {email}")
 
-    def on_email_sent(self, email):
-        for row in self.app_state.get("emails", []):
-            if row.get("email") == email and row.get("send_status") == "pending":
-                row["send_status"] = "sent"
-                row["error_message"] = ""
-                break
-        update_email_status(email, "sent", "")
+    def on_email_sent(self, email_id):
+        row = self.row_index.get(email_id)
+        if row is None:
+            return
+        row["send_status"] = "sent"
+        row["error_message"] = ""
+        row["sent_at"] = datetime.utcnow().isoformat()
+        update_email_status(row.get("email", ""), "sent", "", row["sent_at"])
 
-    def on_email_failed(self, email, error):
-        for row in self.app_state.get("emails", []):
-            if row.get("email") == email and row.get("send_status") == "pending":
-                row["send_status"] = "failed"
-                row["error_message"] = error
-                break
-        update_email_status(email, "failed", error)
+    def on_email_failed(self, email_id, error):
+        row = self.row_index.get(email_id)
+        if row is None:
+            return
+        row["send_status"] = "failed"
+        row["error_message"] = error
+        update_email_status(row.get("email", ""), "failed", error, "")
 
     def on_finished(self):
         self._set_running(False)
@@ -194,18 +189,15 @@ class SendingTab(QWidget):
 
     def pause_sending(self):
         if self.worker:
-            self.worker.request_pause()
-            self._log("Пауза")
+            self.worker.pause_requested = True
 
     def resume_sending(self):
         if self.worker:
-            self.worker.request_resume()
-            self._log("Продолжение")
+            self.worker.pause_requested = False
 
     def stop_sending(self):
         if self.worker:
-            self.worker.request_stop()
-            self._log("Остановка очереди")
+            self.worker.stop_requested = True
 
     def send_test_email(self):
         settings, pwd = self._get_settings_password()
@@ -214,15 +206,13 @@ class SendingTab(QWidget):
             return
         to_addr = settings["smtp_login"]
         attachment = self.app_state.get("attachment", {}).get("path")
-        msg = build_message(settings["smtp_login"], settings["sender_name"], to_addr, "Тест SMTP - Mail Outreach Agent", "Это тестовое письмо для проверки SMTP.", attachment)
         self._log(f"Отправляю: TEST / {to_addr}")
+        msg = build_message(settings["smtp_login"], settings["sender_name"], to_addr, "Тест SMTP - Mail Outreach Agent", "Это тестовое письмо для проверки SMTP.", attachment)
         ok, err = send_email(settings, pwd, msg)
         if ok:
-            self._log("Успешно отправлено")
-            QMessageBox.information(self, "OK", f"Тестовое письмо отправлено на {to_addr}")
+            self._log("Письмо отправлено")
         else:
-            self._log(f"Ошибка: {err}")
-            QMessageBox.critical(self, "Ошибка", err)
+            self._log(f"Ошибка отправки: {err}")
 
     def export_report(self):
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт", "report.csv", "CSV (*.csv)")

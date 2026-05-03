@@ -13,7 +13,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "smtp_login": "",
     "sender_name": "",
     "delay_seconds": 20,
-    "max_per_run": 50,
+    "max_per_run": 500,
     "max_per_day": 100,
     "attachment_path": "",
 }

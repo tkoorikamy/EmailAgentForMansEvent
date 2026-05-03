@@ -1,6 +1,8 @@
 import smtplib
+
 import keyring
-from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QCheckBox, QMessageBox
+from PySide6.QtWidgets import QWidget, QFormLayout, QLineEdit, QPushButton, QCheckBox, QMessageBox, QSpinBox
+
 from app.core.settings import load_settings, save_settings
 
 SERVICE = "MailOutreachAgent"
@@ -19,15 +21,45 @@ class MailboxTab(QWidget):
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.Password)
         self.sender_name = QLineEdit(self.settings["sender_name"])
+
+        self.delay_seconds = QSpinBox()
+        self.delay_seconds.setRange(1, 3600)
+        self.delay_seconds.setValue(int(self.settings.get("delay_seconds", 20)))
+
+        self.max_per_run = QSpinBox()
+        self.max_per_run.setRange(1, 500)
+        self.max_per_run.setValue(int(self.settings.get("max_per_run", 500)))
+
         self.test_btn = QPushButton("Проверить подключение")
         self.save_btn = QPushButton("Сохранить")
         self.test_btn.clicked.connect(self.test_connection)
         self.save_btn.clicked.connect(self.save)
-        for k, w in [("SMTP host", self.host), ("SMTP port", self.port), ("SSL/TLS", self.ssl), ("Email/Login", self.login), ("Password/App password", self.password), ("Имя отправителя", self.sender_name), ("", self.test_btn), ("", self.save_btn)]:
+
+        for k, w in [
+            ("SMTP host", self.host),
+            ("SMTP port", self.port),
+            ("SSL/TLS", self.ssl),
+            ("Email/Login", self.login),
+            ("Password/App password", self.password),
+            ("Имя отправителя", self.sender_name),
+            ("Задержка между письмами (сек)", self.delay_seconds),
+            ("Максимум писем за запуск", self.max_per_run),
+            ("", self.test_btn),
+            ("", self.save_btn),
+        ]:
             layout.addRow(k, w)
 
     def snapshot(self):
-        return {"smtp_host": self.host.text(), "smtp_port": int(self.port.text()), "smtp_ssl": self.ssl.isChecked(), "smtp_starttls": not self.ssl.isChecked(), "smtp_login": self.login.text(), "sender_name": self.sender_name.text()}
+        return {
+            "smtp_host": self.host.text(),
+            "smtp_port": int(self.port.text()),
+            "smtp_ssl": self.ssl.isChecked(),
+            "smtp_starttls": not self.ssl.isChecked(),
+            "smtp_login": self.login.text(),
+            "sender_name": self.sender_name.text(),
+            "delay_seconds": self.delay_seconds.value(),
+            "max_per_run": self.max_per_run.value(),
+        }
 
     def test_connection(self):
         s = self.snapshot()
